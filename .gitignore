@@ -31,3 +31,6 @@ dist/
 # Local machine config -- paths here are specific to one install.
 .claude/settings.local.json
 .mcp.json
+
+# Private working notes. NEVER commit -- this repo is public.
+*.private.md
