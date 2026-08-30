@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from abaqus_mcp.fixes import DEFAULT_RULES, choose_and_apply
+from abaqus_mcp.fixes import DEFAULT_RULES, choose_and_apply, diagnose
 from abaqus_mcp.inp import Deck
 from abaqus_mcp.parsers import Diagnostic, JobStatus, MsgReport, StaReport
 from abaqus_mcp.parsers.dat import DatReport
@@ -97,9 +97,77 @@ def test_warning_does_not_trigger():
     print("OK warning-does-not-trigger")
 
 
+def test_unknown_keyword_repair():
+    # *SOLD SECTION is a typo for *SOLID SECTION.
+    deck = Deck.parse(BASE_DECK.replace("*SOLID SECTION", "*SOLD SECTION")
+                      % ("STEEL", "FIXED"))
+    report = make_report(deck, JobStatus.ABORTED, [err("unknown_keyword")])
+    action = choose_and_apply(report, deck, {}, DEFAULT_RULES)
+    txt = deck.render()
+    assert action is not None and action.rule == "unknown_keyword_repair", action
+    assert "*SOLID SECTION" in txt and "*SOLD SECTION" not in txt, txt
+    # The parameters must survive the keyword rewrite untouched.
+    assert "ELSET=CUBE" in txt and "MATERIAL=STEEL" in txt, txt
+    print("OK unknown_keyword_repair:", action.description)
+
+
+def test_unfamiliar_keyword_is_left_alone():
+    # A keyword we don't know, but that isn't a near-miss of one we do, must
+    # NOT be rewritten -- guessing here would corrupt a valid deck.
+    deck = Deck.parse(BASE_DECK.replace("*HEADING", "*SUBSTRUCTURE GENERATE")
+                      % ("STEEL", "FIXED"))
+    report = make_report(deck, JobStatus.ABORTED, [err("unknown_keyword")])
+    action = choose_and_apply(report, deck, {}, DEFAULT_RULES)
+    assert action is None or action.rule != "unknown_keyword_repair", action
+    assert "*SUBSTRUCTURE GENERATE" in deck.render()
+    print("OK unfamiliar-keyword-left-alone")
+
+
+def test_duplicate_definition_removed():
+    dup = BASE_DECK % ("STEEL", "FIXED")
+    dup = dup.replace("*NSET, NSET=FIXED\n1\n", "*NSET, NSET=FIXED\n1\n" * 2)
+    deck = Deck.parse(dup)
+    assert sum(1 for b in deck.blocks if b.keyword == "NSET") == 2
+    report = make_report(deck, JobStatus.ABORTED, [err("duplicate")])
+    action = choose_and_apply(report, deck, {}, DEFAULT_RULES)
+    assert action is not None and action.rule == "duplicate_definition", action
+    assert sum(1 for b in deck.blocks if b.keyword == "NSET") == 1
+    print("OK duplicate_definition:", action.description)
+
+
+def test_conflicting_definition_is_not_removed():
+    # Same name, DIFFERENT content -> a real conflict, not a redundant copy.
+    conflict = BASE_DECK % ("STEEL", "FIXED")
+    conflict = conflict.replace("*NSET, NSET=FIXED\n1\n",
+                                "*NSET, NSET=FIXED\n1\n*NSET, NSET=FIXED\n2\n")
+    deck = Deck.parse(conflict)
+    report = make_report(deck, JobStatus.ABORTED, [err("duplicate")])
+    action = choose_and_apply(report, deck, {}, DEFAULT_RULES)
+    assert action is None or action.rule != "duplicate_definition", action
+    assert sum(1 for b in deck.blocks if b.keyword == "NSET") == 2
+    print("OK conflicting-definition-kept")
+
+
+def test_unfixable_failure_gives_guidance():
+    # missing_material has no safe auto-fix: guessing a modulus would produce a
+    # deck that converges to a meaningless answer.
+    deck = Deck.parse(BASE_DECK % ("STEEL", "FIXED"))
+    report = make_report(deck, JobStatus.ABORTED, [err("missing_section")])
+    action = choose_and_apply(report, deck, {}, DEFAULT_RULES)
+    assert action is None, "must not invent a section: %r" % (action,)
+    guidance = diagnose(report)
+    assert guidance and "missing_section" in guidance[0], guidance
+    print("OK unfixable-gives-guidance:", guidance[0][:60] + "...")
+
+
 if __name__ == "__main__":
     test_deck_name_repair()
     test_singularity_stabilization()
     test_convergence_refinement()
     test_warning_does_not_trigger()
+    test_unknown_keyword_repair()
+    test_unfamiliar_keyword_is_left_alone()
+    test_duplicate_definition_removed()
+    test_conflicting_definition_is_not_removed()
+    test_unfixable_failure_gives_guidance()
     print("\nAll fix-rule unit tests passed.")

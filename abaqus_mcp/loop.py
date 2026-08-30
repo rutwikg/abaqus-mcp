@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union
 
 from .config import CONFIG, AbaqusConfig
-from .fixes import FixAction, FixRule, choose_and_apply
+from .fixes import FixAction, FixRule, choose_and_apply, diagnose
 from .inp import Deck
 from .report import JobReport
 from .runner import run_job, stage_deck
@@ -104,10 +104,19 @@ def autocorrect_run(
         deck = Deck.load(staged)
         action = choose_and_apply(report, deck, attempt_counts, rules)
         if action is None:
-            result.stopped_reason = (
-                "no applicable fix for the remaining diagnostics "
-                "(categories: %s)" % ", ".join(report.categories or ["none"])
-            )
+            guidance = diagnose(report)
+            if guidance:
+                # The failure is understood, but repairing it would mean
+                # inventing physics. Say what the author must supply instead.
+                result.stopped_reason = (
+                    "no safe automatic fix -- this needs a modelling decision:\n  "
+                    + "\n  ".join(guidance)
+                )
+            else:
+                result.stopped_reason = (
+                    "no applicable fix for the remaining diagnostics "
+                    "(categories: %s)" % ", ".join(report.categories or ["none"])
+                )
             break
         attempt.fix = action
         deck.save(staged)
