@@ -1,0 +1,37 @@
+** BROKEN (input deck): section references material 'STEELX' but the material
+** is named 'STEEL'; BC references 'FIXEDD' but the nset is 'FIXED'.
+** Expected auto-fix: deck_name_repair fuzzy-corrects both names.
+*HEADING
+Cube with mistyped references
+*NODE
+1,  0.0, 0.0, 0.0
+2,  1.0, 0.0, 0.0
+3,  1.0, 1.0, 0.0
+4,  0.0, 1.0, 0.0
+5,  0.0, 0.0, 1.0
+6,  1.0, 0.0, 1.0
+7,  1.0, 1.0, 1.0
+8,  0.0, 1.0, 1.0
+*ELEMENT, TYPE=C3D8, ELSET=CUBE
+1, 1, 2, 3, 4, 5, 6, 7, 8
+*NSET, NSET=FIXED
+1, 4, 5, 8
+*NSET, NSET=PULL
+2, 3, 6, 7
+*SOLID SECTION, ELSET=CUBE, MATERIAL=STEELX
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000.0, 0.3
+*STEP, NLGEOM=NO
+*STATIC
+*BOUNDARY
+FIXEDD, 1, 1
+1, 2, 2
+1, 3, 3
+5, 3, 3
+*CLOAD
+PULL, 1, 100.0
+*OUTPUT, FIELD
+*NODE OUTPUT
+U
+*END STEP

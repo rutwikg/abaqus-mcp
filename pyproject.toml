@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "abaqus-mcp"
+version = "0.1.0"
+description = "MCP server for Abaqus/Standard FEA: builds models, runs jobs, and autonomously diagnoses and fixes solver failures"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "Rutwik Gulakala" }]
+keywords = ["abaqus", "fea", "simulation", "mcp", "cae", "finite-element"]
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+    "Programming Language :: Python :: 3",
+]
+dependencies = ["mcp>=2.0.0"]
+
+[project.urls]
+Homepage = "https://github.com/OWNER/abaqus-mcp"
+Issues = "https://github.com/OWNER/abaqus-mcp/issues"
+
+[project.scripts]
+abaqus-mcp = "abaqus_mcp.server:main"
+
+# abaqus_mcp/scripts_py27/ holds Python 2.7 kernel scripts. They are handed to
+# Abaqus by absolute path and never imported by this interpreter, so they ship
+# as package *data*, not as a package -- Python 3 must never try to parse them.
+# Keeping them inside abaqus_mcp/ is what makes a plain wheel install (uvx,
+# pipx, pip) self-contained.
+[tool.setuptools]
+packages = ["abaqus_mcp", "abaqus_mcp.parsers"]
+
+[tool.setuptools.package-data]
+abaqus_mcp = ["scripts_py27/*.py"]

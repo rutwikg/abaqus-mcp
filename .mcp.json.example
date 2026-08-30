@@ -1,0 +1,19 @@
+{
+  "_comment": [
+    "Copy this to .mcp.json and edit the paths for your machine.",
+    "Option A (below): run from a clone, no install needed.",
+    "Option B: after `pip install .`, use  \"command\": \"abaqus-mcp\", \"args\": []",
+    "Abaqus itself is auto-discovered from PATH or C:\\SIMULIA\\Commands.",
+    "Set ABAQUS_AGENT_COMMAND if your launcher lives somewhere else."
+  ],
+  "mcpServers": {
+    "abaqus-mcp": {
+      "command": "python",
+      "args": ["-m", "abaqus_mcp.server"],
+      "cwd": "/absolute/path/to/abaqus-mcp",
+      "env": {
+        "ABAQUS_AGENT_RUNS_DIR": "/absolute/path/where/job/output/should/go"
+      }
+    }
+  }
+}
