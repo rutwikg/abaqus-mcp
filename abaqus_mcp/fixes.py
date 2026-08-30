@@ -25,6 +25,10 @@ class FixAction:
     rule: str
     description: str
     details: Dict[str, str] = field(default_factory=dict)
+    # Set when the remedy can buy convergence at the cost of physical fidelity.
+    # A converged run is not automatically a correct one, and a tool that hides
+    # that distinction is worse than one that fails loudly.
+    caveat: Optional[str] = None
 
 
 # --------------------------------------------------------------------------
@@ -412,11 +416,83 @@ class DuplicateDefinitionRule(FixRule):
         )
 
 
+class NegativeEigenvalueRule(FixRule):
+    """Damp an unstable (non-positive-definite) stiffness matrix.
+
+    Negative eigenvalues mean the tangent stiffness has lost positive
+    definiteness -- buckling, snap-through, or an unstable material response.
+    Artificial damping lets the solver traverse the unstable branch.
+
+    Deliberately narrow: damping is a *numerical control*, so applying it is
+    physics-preserving in the sense that a converged, lightly damped solution
+    still satisfies equilibrium. Switching the procedure to *STATIC, RIKS is
+    often the better answer for genuine post-buckling, but that changes what
+    analysis is being run, so it is surfaced as guidance rather than applied.
+
+    Unlike the other rules this matches WARNING-level diagnostics too, because
+    Abaqus reports negative eigenvalues as warnings even when they are the
+    reason the step failed -- the error it prints is the downstream convergence
+    failure. Keying on error level alone meant this never fired on a real
+    buckling job (verified against a slender column past its Euler load, where
+    the errors were 'too_many_attempts' and the eigenvalues were warnings).
+
+    The guard against damping a healthy run is ``report.succeeded``, not the
+    diagnostic level: a converged buckling analysis emits these warnings every
+    increment and must be left alone.
+
+    Ordered ahead of ConvergenceRule deliberately. Generic increment refinement
+    eventually reaches for stabilization too, but only on its second attempt --
+    and every attempt is a full solver run and a licence token.
+    """
+
+    name = "instability_damping"
+    priority = 1
+
+    def applicable(self, report: JobReport, deck: Deck) -> bool:
+        if report.succeeded:
+            return False
+        if "negative_eigenvalue" not in report.categories:
+            return False
+        return _get_solver_step(deck) is not None
+
+    def apply(self, report, deck, attempt):
+        # Heavier than the rigid-body ladder: an unstable branch needs more
+        # damping than a merely under-constrained one.
+        factor = [1e-3, 5e-3, 2e-2][min(attempt, 2)]
+        details = _add_stabilization(deck, factor)
+        if details is None:
+            return None
+        note = ""
+        if attempt >= 2:
+            note = (
+                " If this still fails, the instability is likely genuine "
+                "post-buckling: consider *STATIC, RIKS instead of damping it."
+            )
+        return FixAction(
+            rule=self.name,
+            description=(
+                "Damped an unstable equilibrium path (negative eigenvalues) "
+                "with STABILIZE=%g.%s" % (factor, note)
+            ),
+            details=details,
+            caveat=(
+                "Artificial damping can hold the model on the UNSTABLE branch: "
+                "the run converges, but to the pre-buckling configuration rather "
+                "than the physical post-buckling one. Verified on a cantilever at "
+                "1.85x its Euler load, which converged with only 0.14 mm lateral "
+                "deflection. Check that the deformed shape and the stabilization "
+                "energy (ALLSD vs ALLIE) are sane; for genuine post-buckling use "
+                "*STATIC, RIKS instead."
+            ),
+        )
+
+
 DEFAULT_RULES: List[FixRule] = [
     UnknownKeywordRule(),
     DuplicateDefinitionRule(),
     DeckNameRepairRule(),
     SingularityRule(),
+    NegativeEigenvalueRule(),
     ConvergenceRule(),
 ]
 
@@ -450,20 +526,52 @@ UNFIXABLE_GUIDANCE: Dict[str, str] = {
         "different element order."
     ),
     "overconstraint": (
-        "Conflicting constraints act on the same degrees of freedom (e.g. a "
-        "*TIE and a *BOUNDARY on the same nodes). Removing one changes the "
-        "intended model, so this needs an explicit decision."
+        "Conflicting constraints act on the same degrees of freedom -- commonly "
+        "a *TIE or *COUPLING whose slave nodes also carry a *BOUNDARY, or a node "
+        "belonging to two rigid bodies. Dropping either constraint changes the "
+        "intended model, so pick one: free the shared DOF in the *BOUNDARY, or "
+        "shrink the tied surface to exclude those nodes."
     ),
 }
 
 
+def _locations(report: JobReport, category: str, limit: int = 5) -> str:
+    """'node 12, node 44, element 7' for the diagnostics in ``category``.
+
+    Guidance is only actionable if it says *where*. The parsers already pull
+    node/element/DOF off each message, so surface them rather than making the
+    author grep the .msg themselves.
+    """
+    seen: List[str] = []
+    for d in report.diagnostics:
+        if d.category != category:
+            continue
+        for label, value in (("node", d.node), ("element", d.element)):
+            if value is None:
+                continue
+            tag = "%s %d" % (label, value)
+            if label == "node" and d.dof is not None:
+                tag += " (DOF %d)" % d.dof
+            if tag not in seen:
+                seen.append(tag)
+    if not seen:
+        return ""
+    shown = ", ".join(seen[:limit])
+    if len(seen) > limit:
+        shown += ", and %d more" % (len(seen) - limit)
+    return " Affected: %s." % shown
+
+
 def diagnose(report: JobReport) -> List[str]:
     """Actionable guidance for report categories that have no safe auto-fix."""
-    seen = []
+    seen: List[str] = []
     for cat in report.error_categories or report.categories:
         if cat in UNFIXABLE_GUIDANCE and cat not in seen:
             seen.append(cat)
-    return ["%s: %s" % (c, UNFIXABLE_GUIDANCE[c]) for c in seen]
+    return [
+        "%s: %s%s" % (c, UNFIXABLE_GUIDANCE[c], _locations(report, c))
+        for c in seen
+    ]
 
 
 def choose_and_apply(
