@@ -13,10 +13,11 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .config import CONFIG, AbaqusConfig
 from .loop import LoopResult, autocorrect_run
+from .meshfix import is_mesh_failure, mesh_failure_categories, refine_mesh
 from .runner import SolverNotFound
 from .spec import validate_spec
 
@@ -100,19 +101,76 @@ def build_and_run_spec(
     max_iters: int = 5,
     cpus: int = 1,
     cfg: AbaqusConfig = CONFIG,
+    max_remesh: int = 2,
 ) -> Dict[str, Any]:
-    """Full pipeline: build the deck from a spec, then autonomously run+fix it."""
-    build = build_deck_from_spec(spec, job_name=job_name, cfg=cfg)
-    if not build["ok"]:
-        return {"phase": "build", "build": build, "run": None,
-                "succeeded": False}
-    result: LoopResult = autocorrect_run(
-        build["inp"], job_name=job_name or spec.get("model_name", "model"),
-        max_iters=max_iters, cpus=cpus, cfg=cfg,
-    )
-    return {
-        "phase": "run",
-        "build": build,
-        "run": result.narrative(),
-        "succeeded": result.succeeded,
-    }
+    """Full pipeline: build the deck from a spec, then autonomously run+fix it.
+
+    Two nested loops. The inner one (:func:`autocorrect_run`) patches the
+    keyword deck. The outer one here handles failures the deck cannot express:
+    a negative Jacobian or a badly distorted element is a property of the
+    *mesh*, so the remedy is to refine the spec and build again rather than to
+    keep editing solver controls. ``max_remesh`` bounds that outer loop -- each
+    pass costs a full CAE build plus a solve.
+    """
+    job = job_name or spec.get("model_name", "model")
+    current = spec
+    remesh_history: List[Dict[str, str]] = []
+    caveats: List[str] = []
+    narratives: List[str] = []
+
+    for attempt in range(max_remesh + 1):
+        build = build_deck_from_spec(current, job_name=job, cfg=cfg)
+        if not build["ok"]:
+            # A CAE build failure is usually meshing giving up on the geometry,
+            # which is exactly what refinement addresses -- so retry rather
+            # than bailing on the first failure as this used to.
+            refined = refine_mesh(spec, attempt)
+            if refined is None:
+                return {"phase": "build", "build": build, "run": None,
+                        "succeeded": False, "remeshes": remesh_history,
+                        "caveats": [c for c in caveats if c]}
+            current, fix = refined
+            remesh_history.append({"trigger": "build_failure", **fix.details})
+            caveats.append(fix.caveat)
+            narratives.append("Build failed; %s" % fix.description)
+            continue
+
+        result: LoopResult = autocorrect_run(
+            build["inp"], job_name=job, max_iters=max_iters, cpus=cpus, cfg=cfg,
+        )
+        narratives.append(result.narrative())
+        caveats.extend(result.caveats)
+
+        if result.succeeded or not is_mesh_failure(result.final_report):
+            return {
+                "phase": "run",
+                "build": build,
+                "run": "\n\n".join(narratives),
+                "succeeded": result.succeeded,
+                "remeshes": remesh_history,
+                "caveats": [c for c in caveats if c],
+            }
+
+        # Mesh-level failure: refine the spec and rebuild.
+        refined = refine_mesh(spec, attempt)
+        if refined is None:
+            narratives.append(
+                "Mesh failure persists (%s) but refinement is exhausted -- the "
+                "geometry itself likely needs attention."
+                % ", ".join(mesh_failure_categories(result.final_report))
+            )
+            return {"phase": "run", "build": build,
+                    "run": "\n\n".join(narratives), "succeeded": False,
+                    "remeshes": remesh_history,
+                    "caveats": [c for c in caveats if c]}
+        current, fix = refined
+        remesh_history.append({
+            "trigger": ",".join(mesh_failure_categories(result.final_report)),
+            **fix.details,
+        })
+        caveats.append(fix.caveat)
+        narratives.append("REMESH -> %s" % fix.description)
+
+    return {"phase": "run", "build": None, "run": "\n\n".join(narratives),
+            "succeeded": False, "remeshes": remesh_history,
+            "caveats": [c for c in caveats if c]}
