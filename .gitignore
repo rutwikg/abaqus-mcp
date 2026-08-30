@@ -1,0 +1,33 @@
+# Abaqus run artifacts
+runs/
+*.odb
+*.lck
+*.sta
+*.msg
+*.dat
+*.com
+*.prt
+*.sim
+*.023
+*.mdl
+*.stt
+*.log
+*.rpy*
+*.rec
+
+# ...but the checked-in parser fixtures are real solver output and must survive
+# the blanket *.sta / *.msg / *.dat rules above.
+!tests/fixtures/**
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Local machine config -- paths here are specific to one install.
+.claude/settings.local.json
+.mcp.json

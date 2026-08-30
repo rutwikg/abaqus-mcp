@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+title: "abaqus-mcp: an MCP server for autonomous Abaqus/Standard FEA"
+message: "If you use this software in your research, please cite it."
+type: software
+authors:
+  - family-names: Gulakala
+    given-names: Rutwik
+repository-code: "https://github.com/OWNER/abaqus-mcp"
+license: AGPL-3.0-or-later
+version: 0.1.0
+abstract: >-
+  An MCP (Model Context Protocol) server that drives Abaqus/Standard finite
+  element analysis from natural language. It builds meshed models from a JSON
+  simulation spec (parametric shapes or imported STEP/IGES CAD), submits jobs
+  headless, and autonomously diagnoses and repairs solver failures by parsing
+  the .sta / .msg / .dat outputs and patching the keyword deck before retrying.
+keywords:
+  - finite element analysis
+  - Abaqus
+  - Model Context Protocol
+  - simulation automation
+  - large language models

@@ -1,0 +1,180 @@
+# abaqus-mcp
+
+Natural-language driver for Abaqus/Standard FEA. Describe a problem, hand over an
+input deck, and the agent runs the simulation and **autonomously diagnoses and
+fixes failures** by reading the `.sta` / `.msg` / `.dat` files and retrying.
+
+Exposed as an **MCP server**, so any MCP client (Claude Desktop, Claude Code, or
+a future local-LLM client) can drive it.
+
+> **Requires a working Abaqus installation and license.** This project automates
+> Abaqus; it does not replace or include it. It is not affiliated with or
+> endorsed by Dassault Systèmes.
+
+## Status
+
+| Phase | Piece | State |
+|-------|-------|-------|
+| 1 | Solver runner + `.sta`/`.msg`/`.dat` parsers + combined report | ✅ validated on real jobs |
+| 2 | MCP server (`abaqus-mcp`, 13 tools) | ✅ working |
+| 3 | Autonomous fix loop (deck-repair, stabilization, increment refinement) | ✅ working on real failures |
+| 4 | Model authoring — CAD (STEP/IGES) import + auto-mesh + physics from a spec | ✅ working end-to-end |
+| 4b | Parametric geometry library (block/plate/cylinder/notched bar/L-bracket) | ✅ working end-to-end |
+| 4c | Results extraction from .odb (peak stress/disp, PEEQ/yield, reaction force) | ✅ working |
+| 5 | Local-LLM desktop client (Ollama/llama.cpp) | ⏳ later |
+
+## Architecture
+
+Two Python interpreters, kept strictly separate:
+
+- **Engine + MCP server** run on **system Python 3.11**.
+- Anything handed to the Abaqus kernel (`abaqus python`, `abaqus cae -noGUI`)
+  must be **Python 2.7** (Abaqus 2022) and lives under `abaqus_mcp/scripts_py27/`,
+  invoked as a subprocess — never imported.
+
+Model authoring is **hybrid**: CAE Python builds/meshes geometry → exports a flat
+`.inp` → the solver runs the deck → **error-correction happens on the transparent
+keyword deck** (easy to parse and patch), not on Python tracebacks.
+
+### Model authoring (Phase 4)
+Describe a job as a **simulation spec** (JSON) — geometry (STEP/IGES), mesh,
+materials, section, steps, BCs and loads. Loads/BCs attach to faces via
+coordinate-free selectors (`xmin`…`zmax`, or an explicit `box`) resolved against
+the part's bounding box. The Py2.7 CAE builder imports the CAD, meshes it, applies
+everything, and exports a flat `.inp`; the self-correcting loop runs it.
+Geometry can also be **parametric** (no CAD file): set
+`geometry: {type: "parametric", shape: ..., params: {...}}`. Shapes: `block`,
+`beam`, `plate`, `cylinder`, `notched_bar`, `l_bracket`. See
+`abaqus_mcp/spec.py` (schema + `example_spec()` / `example_parametric_spec()`)
+and `abaqus_mcp/scripts_py27/build_from_spec.py` (the CAE builder). Try them:
+`python tests/demo_cad_pipeline.py` and `python tests/demo_parametric.py notched_bar`.
+
+### The self-correcting loop
+```
+stage deck → run → parse .sta/.msg/.dat → classify failure
+   → pick highest-priority applicable fix rule → patch deck → resubmit
+   (bounded retries; every attempt's deck + report is kept for audit)
+```
+### Results extraction (Phase 4c)
+After a job COMPLETES, `abaqus_mcp/results.py` runs the Py2.7 extractor
+(`abaqus_mcp/scripts_py27/extract_odb.py`) under `abaqus python` (no CAE license needed) to
+pull per-step peak von Mises stress, peak displacement, equivalent plastic strain
+(PEEQ → yielded?), and net reaction force from the `.odb`. The `run_*` /
+`build_and_simulate` MCP tools append this automatically; `get_results` fetches
+it on demand.
+
+Current fix rules (`abaqus_mcp/fixes.py`):
+- **deck_name_repair** — fuzzy-corrects mistyped set/material references.
+- **rigid_body_stabilization** — adds `STABILIZE` for zero-pivot / singular models.
+- **convergence_refinement** — shrinks the initial/min time increment, raises the
+  increment cap, and escalates to stabilization for non-converging steps.
+
+## Layout
+```
+abaqus_mcp/
+    config.py        # locate Abaqus, manage run dirs (env-var overridable)
+    runner.py        # stage + run jobs headless (Windows cmd /c abaqus.bat)
+    report.py        # combined JobReport over the three parsers
+    inp.py           # edit-friendly keyword-deck model
+    fixes.py         # failure -> fix rules
+    loop.py          # autonomous run/diagnose/fix/retry loop
+    results.py       # .odb extraction (peak stress/disp/PEEQ, reaction force)
+    authoring.py     # spec -> meshed model -> flat .inp, via the CAE builder
+    spec.py          # simulation-spec schema + validation
+    server.py        # MCP server (stdio)
+    parsers/         # sta.py, msg.py, dat.py
+    scripts_py27/    # Py2.7 CAE/ODB scripts -- data files, never imported,
+                     # shipped inside the package so a wheel is self-contained
+tests/
+    models/          # validation + deliberately-broken decks
+    fixtures/        # real solver output the parser tests read
+    test_parsers_smoke.py
+    test_fix_rules.py
+    test_spec.py
+    demo_autocorrect.py
+runs/                # job output (gitignored)
+```
+
+## Requirements
+
+- **Abaqus** (developed against 2022) with a working license, on `PATH` or in
+  `C:\SIMULIA\Commands`.
+- **Python 3.9+** for the server. This is *separate* from the Python 2.7 that
+  Abaqus bundles — do not install anything into the Abaqus interpreter.
+
+## Install
+
+```bash
+pip install .
+```
+
+That installs the `abaqus-mcp` console script. To hack on it instead, add `-e`,
+or skip installing entirely and run `python -m abaqus_mcp.server` from
+the repo root.
+
+## Quick start
+
+```bash
+# Unit tests -- no Abaqus license needed:
+python tests/test_fix_rules.py
+python tests/test_parsers_smoke.py
+python tests/test_spec.py
+```
+
+```bash
+# A real self-correcting run -- needs an Abaqus license:
+python tests/demo_autocorrect.py
+```
+
+Directly from Python:
+```python
+from abaqus_mcp.loop import autocorrect_run
+result = autocorrect_run("path/to/model.inp", max_iters=5)
+print(result.narrative())
+```
+
+## Use from an MCP client
+
+Copy [`.mcp.json.example`](.mcp.json.example) to `.mcp.json` (Claude Code) or
+merge it into `claude_desktop_config.json` (Claude Desktop), then edit the paths:
+
+```json
+{
+  "mcpServers": {
+    "abaqus-mcp": {
+      "command": "abaqus-mcp",
+      "args": [],
+      "env": { "ABAQUS_AGENT_RUNS_DIR": "/where/job/output/should/go" }
+    }
+  }
+}
+```
+
+Then ask for `check_environment` first — it reports whether the Abaqus launcher
+was found — followed by `run_simulation`, `autocorrect_simulation`, or
+`build_and_simulate`.
+
+### Tools
+
+`check_environment`, `run_simulation`, `autocorrect_simulation`,
+`get_job_status`, `read_job_file`, `list_jobs`, `get_spec_template`,
+`get_parametric_spec_template`, `validate_simulation_spec`, `build_model`,
+`build_and_simulate`, `get_results`, `greeting`.
+
+## Environment overrides
+`ABAQUS_AGENT_COMMAND` (launcher path), `ABAQUS_AGENT_RUNS_DIR` (defaults to
+`./runs` beside wherever the server was launched), `ABAQUS_AGENT_CPUS`,
+`ABAQUS_AGENT_JOB_TIMEOUT`.
+
+## License
+
+**AGPL-3.0-or-later** — see [LICENSE](LICENSE). You may use, modify, and
+redistribute this freely, but any distributed derivative — **including one
+offered to users over a network** — must also be released under the AGPL with
+source available. Attribution must be preserved.
+
+If those terms don't work for you (for example, you want to build this into a
+closed-source product), a separate commercial license is available — open an
+issue to get in touch.
+
+Academic use: please cite via [CITATION.cff](CITATION.cff).
