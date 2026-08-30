@@ -1,0 +1,46 @@
+name: Publish to PyPI
+
+# Publishes only when you cut a GitHub Release. Nothing happens on ordinary
+# pushes, so this file is inert until a release exists AND PyPI has been told
+# to trust this workflow (see README / repo settings for Trusted Publishing).
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+      - name: Verify metadata renders on PyPI
+        run: |
+          python -m pip install --upgrade twine
+          python -m twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # The environment name must match what you register on PyPI as the
+    # Trusted Publisher, otherwise the OIDC exchange is rejected.
+    environment: pypi
+    permissions:
+      # Required for Trusted Publishing: lets the job mint an OIDC token that
+      # PyPI verifies. No API token or password is stored anywhere.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
