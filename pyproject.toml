@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "abaqus-mcp"
-version = "0.1.1"
+version = "0.2.0"
 description = "MCP server for Abaqus/Standard FEA: builds models, runs jobs, and autonomously diagnoses and fixes solver failures"
 readme = "README.md"
 requires-python = ">=3.9"

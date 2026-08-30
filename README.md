@@ -54,10 +54,20 @@ and `abaqus_mcp/scripts_py27/build_from_spec.py` (the CAE builder). Try them:
 `python tests/demo_cad_pipeline.py` and `python tests/demo_parametric.py notched_bar`.
 
 ### The self-correcting loop
+Two nested loops. The inner one patches the **deck**; the outer one rebuilds the
+**mesh**, because a distorted or inverted element is not something any edit to
+`*STATIC` can repair.
+
 ```
-stage deck → run → parse .sta/.msg/.dat → classify failure
-   → pick highest-priority applicable fix rule → patch deck → resubmit
-   (bounded retries; every attempt's deck + report is kept for audit)
+                    ┌──────────────── outer loop (spec) ────────────────┐
+spec → CAE build → .inp → ┌── inner loop (deck) ──┐                     │
+                          │ run → parse .sta/.msg │                     │
+                          │  /.dat → classify →   │                     │
+                          │  patch deck → resubmit│                     │
+                          └───────────┬───────────┘                     │
+                                      │ mesh-shaped failure?            │
+                                      └──→ refine seed size → rebuild ──┘
+   (both bounded; every attempt's deck + report is kept for audit)
 ```
 ### Results extraction (Phase 4c)
 After a job COMPLETES, `abaqus_mcp/results.py` runs the Py2.7 extractor
@@ -67,11 +77,34 @@ pull per-step peak von Mises stress, peak displacement, equivalent plastic strai
 `build_and_simulate` MCP tools append this automatically; `get_results` fetches
 it on demand.
 
-Current fix rules (`abaqus_mcp/fixes.py`):
+Deck-level fix rules (`abaqus_mcp/fixes.py`), applied highest-priority first:
+- **unknown_keyword_repair** — fuzzy-corrects a misspelled `*KEYWORD`. Only when
+  the match is strong; an unfamiliar-but-valid keyword is left alone.
+- **duplicate_definition** — drops *identical* repeat definitions. Two blocks
+  defining the same name differently are a real conflict and are kept.
 - **deck_name_repair** — fuzzy-corrects mistyped set/material references.
 - **rigid_body_stabilization** — adds `STABILIZE` for zero-pivot / singular models.
+- **instability_damping** — damps negative eigenvalues (buckling, snap-through)
+  with an escalating `STABILIZE`.
 - **convergence_refinement** — shrinks the initial/min time increment, raises the
   increment cap, and escalates to stabilization for non-converging steps.
+
+Mesh-level repair (`abaqus_mcp/meshfix.py`) refines the spec's seed size and
+rebuilds when the deck cannot express the problem (negative Jacobian, excessive
+distortion, malformed connectivity) or when the CAE build itself fails.
+
+### Converged is not correct
+A remedy that buys convergence by changing the physics says so. `instability_damping`
+can hold a model on the **unstable** branch — verified on a cantilever at 1.85×
+its Euler load, which converged to 0.14 mm of lateral deflection instead of
+buckling. Runs repaired that way report as `SUCCEEDED (with caveats)` and name
+the risk, rather than passing silently.
+
+Equally, failures with no *safe* automatic repair are not guessed at. Inventing
+an elastic modulus or a shell thickness produces a deck that converges to a
+meaningless answer, so `missing_material`, `missing_section`, `element_definition`
+and `overconstraint` instead yield guidance naming what you must supply — and,
+where the parsers captured them, the offending nodes, elements and DOFs.
 
 ## Layout
 ```
@@ -86,6 +119,7 @@ abaqus_mcp/
     authoring.py     # spec -> meshed model -> flat .inp, via the CAE builder
     spec.py          # simulation-spec schema + validation
     server.py        # MCP server (stdio)
+    meshfix.py       # spec-level repair: refine the mesh and rebuild
     parsers/         # sta.py, msg.py, dat.py
     scripts_py27/    # Py2.7 CAE/ODB scripts -- data files, never imported,
                      # shipped inside the package so a wheel is self-contained
@@ -94,6 +128,7 @@ tests/
     fixtures/        # real solver output the parser tests read
     test_parsers_smoke.py
     test_fix_rules.py
+    test_meshfix.py
     test_spec.py
     demo_autocorrect.py
 runs/                # job output (gitignored)
@@ -195,6 +230,12 @@ was found — followed by `run_simulation`, `autocorrect_simulation`, or
 `ABAQUS_AGENT_COMMAND` (launcher path), `ABAQUS_AGENT_RUNS_DIR` (defaults to
 `./runs` beside wherever the server was launched), `ABAQUS_AGENT_CPUS`,
 `ABAQUS_AGENT_JOB_TIMEOUT`.
+
+## Contributing
+
+Open work is listed in [CONTRIBUTING.md](CONTRIBUTING.md), split by whether it
+needs an Abaqus licence — several tasks don't. It also documents the one rule
+that governs every fix: **never invent physics to make a job run.**
 
 ## License
 
