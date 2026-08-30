@@ -5,7 +5,7 @@ type: software
 authors:
   - family-names: Gulakala
     given-names: Rutwik
-repository-code: "https://github.com/OWNER/abaqus-mcp"
+repository-code: "https://github.com/rutwikg/abaqus-mcp"
 license: AGPL-3.0-or-later
 version: 0.1.0
 abstract: >-
