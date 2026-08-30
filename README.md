@@ -1,5 +1,9 @@
 # abaqus-mcp
 
+[![PyPI](https://img.shields.io/pypi/v/abaqus-mcp)](https://pypi.org/project/abaqus-mcp/)
+[![Python](https://img.shields.io/pypi/pyversions/abaqus-mcp)](https://pypi.org/project/abaqus-mcp/)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+
 Natural-language driver for Abaqus/Standard FEA. Describe a problem, hand over an
 input deck, and the agent runs the simulation and **autonomously diagnoses and
 fixes failures** by reading the `.sta` / `.msg` / `.dat` files and retrying.
@@ -105,16 +109,28 @@ runs/                # job output (gitignored)
 ## Install
 
 ```bash
+pip install abaqus-mcp
+```
+
+That provides the `abaqus-mcp` command, which is what an MCP client launches.
+Or skip installing altogether and let [uv](https://docs.astral.sh/uv/) fetch it
+on demand:
+
+```bash
+uvx --from abaqus-mcp abaqus-mcp
+```
+
+### From source
+
+For development, or to run the demos and tests (which are not in the wheel):
+
+```bash
 git clone https://github.com/rutwikg/abaqus-mcp.git
 ```
 
 ```bash
-cd abaqus-mcp && pip install .
+cd abaqus-mcp && pip install -e .
 ```
-
-That installs the `abaqus-mcp` console script, which is what the MCP client
-launches. To hack on the code instead, use `pip install -e .`, or skip
-installing entirely and run `python -m abaqus_mcp.server` from the repo root.
 
 ## Verify it works
 
