@@ -5,4 +5,4 @@ Abaqus kernel (Python 2.7 for Abaqus 2022) lives under ``scripts_py27`` and is
 invoked as a subprocess -- never imported here.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
