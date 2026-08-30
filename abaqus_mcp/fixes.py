@@ -120,6 +120,44 @@ def _add_stabilization(deck: Deck, factor: float) -> Optional[Dict[str, str]]:
 _LOAD_BC_KEYWORDS = ("BOUNDARY", "CLOAD", "DLOAD", "DSLOAD", "TEMPERATURE")
 _SECTION_KEYWORDS = ("SOLID SECTION", "SHELL SECTION", "BEAM SECTION", "MEMBRANE SECTION")
 
+# Keywords we recognise. Not the whole Abaqus manual -- just enough that a
+# deck this agent writes or repairs parses cleanly, and that a typo in a common
+# keyword has something to match against. An unlisted-but-valid keyword is
+# harmless: UnknownKeywordRule only rewrites when a close match exists, so a
+# genuinely unfamiliar keyword scores low and is left alone.
+ABAQUS_KEYWORDS = frozenset([
+    # structure
+    "HEADING", "PREPRINT", "SYSTEM", "INCLUDE", "PARAMETER", "RESTART",
+    "PART", "END PART", "ASSEMBLY", "END ASSEMBLY", "INSTANCE", "END INSTANCE",
+    # mesh + sets
+    "NODE", "ELEMENT", "NSET", "ELSET", "SURFACE", "NCOPY", "NGEN", "ELGEN",
+    # sections
+    "SOLID SECTION", "SHELL SECTION", "BEAM SECTION", "MEMBRANE SECTION",
+    "CONNECTOR SECTION", "GASKET SECTION", "BEAM GENERAL SECTION",
+    # materials
+    "MATERIAL", "ELASTIC", "PLASTIC", "DENSITY", "EXPANSION", "DAMPING",
+    "CONDUCTIVITY", "SPECIFIC HEAT", "LATENT HEAT", "DEPVAR", "USER MATERIAL",
+    "HYPERELASTIC", "VISCOELASTIC", "CREEP",
+    "DAMAGE INITIATION", "DAMAGE EVOLUTION",
+    # steps + procedures
+    "STEP", "END STEP", "STATIC", "DYNAMIC", "VISCO", "BUCKLE", "FREQUENCY",
+    "MODAL DYNAMIC", "HEAT TRANSFER", "COUPLED TEMPERATURE-DISPLACEMENT",
+    "SOILS", "STEADY STATE DYNAMICS", "CONTROLS", "SOLVER CONTROLS", "MONITOR",
+    # loads + BCs
+    "BOUNDARY", "CLOAD", "DLOAD", "DSLOAD", "TEMPERATURE", "FIELD", "AMPLITUDE",
+    "INITIAL CONDITIONS", "ORIENTATION", "DISTRIBUTION", "TRANSFORM",
+    # interactions + constraints
+    "TIE", "CONTACT PAIR", "CONTACT", "SURFACE INTERACTION", "SURFACE BEHAVIOR",
+    "FRICTION", "CONTACT INCLUSIONS", "CONTACT EXCLUSIONS", "CONTACT CONTROLS",
+    "RIGID BODY", "COUPLING", "KINEMATIC", "DISTRIBUTING", "MPC", "EQUATION",
+    # output
+    "OUTPUT", "NODE OUTPUT", "ELEMENT OUTPUT", "CONTACT OUTPUT", "ENERGY OUTPUT",
+    "NODE PRINT", "EL PRINT", "NODE FILE", "EL FILE", "PRINT",
+    # explicit-dynamics controls
+    "BULK VISCOSITY", "MASS SCALING", "FIXED MASS SCALING",
+    "VARIABLE MASS SCALING",
+])
+
 
 def _referenced_names(deck: Deck) -> Dict[str, List[Block]]:
     """Collect (name -> blocks referencing it) for materials and sets."""
@@ -277,11 +315,155 @@ class ConvergenceRule(FixRule):
         return FixAction(rule=self.name, description=desc, details=details)
 
 
+class UnknownKeywordRule(FixRule):
+    """Fuzzy-correct a mistyped *KEYWORD against the known Abaqus keyword set.
+
+    Abaqus aborts at input-parse time on an unrecognised keyword, so this fires
+    before anything is solved. Purely a spelling repair: the parameters and data
+    lines are left untouched, so the intended physics is preserved.
+    """
+
+    name = "unknown_keyword_repair"
+    priority = 0
+
+    # Deliberately stricter than the 0.5 used for user-chosen set/material
+    # names. Keywords come from a fixed vocabulary, so a real typo scores high;
+    # a low score means we do not understand the deck and should not guess.
+    _CUTOFF = 0.8
+
+    def _unknown(self, deck: Deck):
+        """Return [(bad_keyword, best_match)] for keywords we can repair."""
+        out = []
+        for b in deck.blocks:
+            if b.is_comment or not b.keyword or b.keyword in ABAQUS_KEYWORDS:
+                continue
+            match = difflib.get_close_matches(
+                b.keyword, ABAQUS_KEYWORDS, n=1, cutoff=self._CUTOFF
+            )
+            if match:
+                out.append((b, match[0]))
+        return out
+
+    def applicable(self, report: JobReport, deck: Deck) -> bool:
+        if report.succeeded:
+            return False
+        return bool(self._unknown(deck))
+
+    def apply(self, report, deck, attempt):
+        fixed = []
+        for block, good in self._unknown(deck):
+            fixed.append("*%s -> *%s" % (block.keyword, good))
+            block.keyword = good
+        if not fixed:
+            return None
+        return FixAction(
+            rule=self.name,
+            description="Corrected misspelled keyword(s): " + "; ".join(fixed),
+            details={"fixes": "; ".join(fixed)},
+        )
+
+
+class DuplicateDefinitionRule(FixRule):
+    """Drop exact-duplicate definition blocks.
+
+    Only *identical* repeats are removed -- same keyword, same parameters, same
+    data. A redundant copy cannot carry information, so dropping it is safe.
+    Two blocks that define the same name *differently* are a genuine conflict
+    the author has to resolve, and are left alone for the diagnosis path.
+    """
+
+    name = "duplicate_definition"
+    priority = 0
+
+    _DEFINITION_KEYWORDS = ("MATERIAL", "NSET", "ELSET", "SURFACE", "AMPLITUDE")
+
+    def _duplicates(self, deck: Deck) -> List[Block]:
+        seen: Dict[str, Block] = {}
+        dupes: List[Block] = []
+        for b in deck.blocks:
+            if b.is_comment or b.keyword not in self._DEFINITION_KEYWORDS:
+                continue
+            key = b.render()
+            if key in seen:
+                dupes.append(b)
+            else:
+                seen[key] = b
+        return dupes
+
+    def applicable(self, report: JobReport, deck: Deck) -> bool:
+        if report.succeeded:
+            return False
+        return bool(self._duplicates(deck))
+
+    def apply(self, report, deck, attempt):
+        dupes = self._duplicates(deck)
+        if not dupes:
+            return None
+        labels = []
+        for b in dupes:
+            name = b.param("NAME") or b.param(b.keyword) or "?"
+            labels.append("*%s %s" % (b.keyword, name))
+            deck.blocks.remove(b)
+        return FixAction(
+            rule=self.name,
+            description="Removed %d exact-duplicate definition(s): %s"
+            % (len(dupes), "; ".join(labels)),
+            details={"removed": "; ".join(labels)},
+        )
+
+
 DEFAULT_RULES: List[FixRule] = [
+    UnknownKeywordRule(),
+    DuplicateDefinitionRule(),
     DeckNameRepairRule(),
     SingularityRule(),
     ConvergenceRule(),
 ]
+
+
+# --------------------------------------------------------------------------
+# diagnosis for failures that CANNOT be safely auto-repaired
+# --------------------------------------------------------------------------
+
+# Categories where inventing a fix would mean inventing physics. Guessing an
+# elastic modulus or a shell thickness to make a job run produces a deck that
+# converges to a meaningless answer -- worse than failing. For these we stop
+# and say precisely what the author must supply.
+UNFIXABLE_GUIDANCE: Dict[str, str] = {
+    "missing_material": (
+        "A section references a material that is not defined, and no similarly "
+        "named material exists to correct it to. Add a *MATERIAL block (with at "
+        "least *ELASTIC) for it -- its properties cannot be guessed."
+    ),
+    "missing_section": (
+        "Elements have no section assignment. Add a *SOLID SECTION / *SHELL "
+        "SECTION (etc.) binding the element set to a material; the thickness "
+        "and material choice are modelling decisions, not defaults."
+    ),
+    "element_definition": (
+        "Element connectivity is invalid -- the mesh itself is malformed. "
+        "Re-generate the mesh rather than patching the deck."
+    ),
+    "negative_jacobian": (
+        "Elements are inverted or badly shaped (negative Jacobian). This is a "
+        "meshing failure; re-mesh, ideally with a smaller seed size or a "
+        "different element order."
+    ),
+    "overconstraint": (
+        "Conflicting constraints act on the same degrees of freedom (e.g. a "
+        "*TIE and a *BOUNDARY on the same nodes). Removing one changes the "
+        "intended model, so this needs an explicit decision."
+    ),
+}
+
+
+def diagnose(report: JobReport) -> List[str]:
+    """Actionable guidance for report categories that have no safe auto-fix."""
+    seen = []
+    for cat in report.error_categories or report.categories:
+        if cat in UNFIXABLE_GUIDANCE and cat not in seen:
+            seen.append(cat)
+    return ["%s: %s" % (c, UNFIXABLE_GUIDANCE[c]) for c in seen]
 
 
 def choose_and_apply(
