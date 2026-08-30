@@ -20,8 +20,8 @@ classifiers = [
 dependencies = ["mcp>=2.0.0"]
 
 [project.urls]
-Homepage = "https://github.com/OWNER/abaqus-mcp"
-Issues = "https://github.com/OWNER/abaqus-mcp/issues"
+Homepage = "https://github.com/rutwikg/abaqus-mcp"
+Issues = "https://github.com/rutwikg/abaqus-mcp/issues"
 
 [project.scripts]
 abaqus-mcp = "abaqus_mcp.server:main"
