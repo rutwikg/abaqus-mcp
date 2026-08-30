@@ -105,24 +105,38 @@ runs/                # job output (gitignored)
 ## Install
 
 ```bash
-pip install .
-```
-
-That installs the `abaqus-mcp` console script. To hack on it instead, add `-e`,
-or skip installing entirely and run `python -m abaqus_mcp.server` from
-the repo root.
-
-## Quick start
-
-```bash
-# Unit tests -- no Abaqus license needed:
-python tests/test_fix_rules.py
-python tests/test_parsers_smoke.py
-python tests/test_spec.py
+git clone https://github.com/rutwikg/abaqus-mcp.git
 ```
 
 ```bash
-# A real self-correcting run -- needs an Abaqus license:
+cd abaqus-mcp && pip install .
+```
+
+That installs the `abaqus-mcp` console script, which is what the MCP client
+launches. To hack on the code instead, use `pip install -e .`, or skip
+installing entirely and run `python -m abaqus_mcp.server` from the repo root.
+
+## Verify it works
+
+Check that the server can see your Abaqus installation — this prints the
+resolved launcher and exits, without consuming a license token:
+
+```bash
+python -c "from abaqus_mcp.config import CONFIG; print(CONFIG.command, CONFIG.available())"
+```
+
+If that prints `False`, set `ABAQUS_AGENT_COMMAND` to your launcher's full path.
+
+Then run the unit tests, which need no Abaqus license:
+
+```bash
+python tests/test_fix_rules.py && python tests/test_parsers_smoke.py && python tests/test_spec.py
+```
+
+And a real self-correcting run against the solver — this one *does* need a
+license. It submits a deliberately broken deck and repairs it:
+
+```bash
 python tests/demo_autocorrect.py
 ```
 
