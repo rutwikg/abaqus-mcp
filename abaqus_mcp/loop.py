@@ -37,11 +37,26 @@ class LoopResult:
     working_deck: Optional[str] = None
     stopped_reason: str = ""
 
+    @property
+    def caveats(self) -> List[str]:
+        """Fidelity warnings from fixes that were actually applied.
+
+        Reported even (especially) on success: a remedy like artificial damping
+        can convert a failed run into a converged one that answers a slightly
+        different question.
+        """
+        out: List[str] = []
+        for a in self.attempts:
+            if a.fix is not None and a.fix.caveat and a.fix.caveat not in out:
+                out.append(a.fix.caveat)
+        return out
+
     def narrative(self) -> str:
+        headline = "SUCCEEDED" if self.succeeded else "FAILED"
+        if self.succeeded and self.caveats:
+            headline = "SUCCEEDED (with caveats -- read below)"
         lines = ["Autonomous run of '%s': %s in %d attempt(s)." % (
-            self.job_name,
-            "SUCCEEDED" if self.succeeded else "FAILED",
-            len(self.attempts),
+            self.job_name, headline, len(self.attempts),
         )]
         for a in self.attempts:
             lines.append("")
@@ -57,6 +72,11 @@ class LoopResult:
                     lines.append("  categories: " + ", ".join(cats))
             if a.fix is not None:
                 lines.append("  FIX -> %s" % a.fix.description)
+        if self.caveats:
+            lines.append("")
+            lines.append("!! CAVEATS -- the result may not mean what it looks like:")
+            for c in self.caveats:
+                lines.append("   - %s" % c)
         if not self.succeeded:
             lines.append("")
             lines.append("Stopped: %s" % self.stopped_reason)

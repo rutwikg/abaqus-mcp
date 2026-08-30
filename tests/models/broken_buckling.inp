@@ -1,0 +1,62 @@
+** BROKEN (unstable equilibrium): slender cantilever column compressed well past
+** its Euler buckling load, with a small transverse perturbation to trigger the
+** mode. The tangent stiffness loses positive definiteness at the bifurcation,
+** so Abaqus/Standard reports negative eigenvalues and fails to converge.
+**
+** L = 1000 mm, 10x10 mm rectangular steel section, cantilevered.
+** I = 833.3 mm^4  ->  Euler P_cr = pi^2 EI / (2L)^2 ~= 432 N.
+** Applied axial load is 800 N, comfortably past critical.
+**
+** Expected auto-fix: instability_damping adds STABILIZE so the solver can
+** traverse the unstable branch.
+*HEADING
+Slender column past Euler buckling load
+*NODE
+ 1,    0.0, 0.0, 0.0
+ 2,  100.0, 0.0, 0.0
+ 3,  200.0, 0.0, 0.0
+ 4,  300.0, 0.0, 0.0
+ 5,  400.0, 0.0, 0.0
+ 6,  500.0, 0.0, 0.0
+ 7,  600.0, 0.0, 0.0
+ 8,  700.0, 0.0, 0.0
+ 9,  800.0, 0.0, 0.0
+10,  900.0, 0.0, 0.0
+11, 1000.0, 0.0, 0.0
+*NSET, NSET=BASE
+1
+*NSET, NSET=TIP
+11
+*ELEMENT, TYPE=B31, ELSET=COL
+ 1,  1,  2
+ 2,  2,  3
+ 3,  3,  4
+ 4,  4,  5
+ 5,  5,  6
+ 6,  6,  7
+ 7,  7,  8
+ 8,  8,  9
+ 9,  9, 10
+10, 10, 11
+*BEAM SECTION, ELSET=COL, MATERIAL=STEEL, SECTION=RECT
+10.0, 10.0
+0.0, 0.0, 1.0
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000., 0.3
+*STEP, NLGEOM=YES, INC=200
+*STATIC
+0.05, 1.0, 1e-8, 0.1
+*BOUNDARY
+BASE, 1, 6
+*CLOAD
+** axial compression, past the critical load
+TIP, 1, -800.0
+** small transverse perturbation to seed the buckling mode
+TIP, 2, 1.0
+*OUTPUT, FIELD
+*NODE OUTPUT
+U, RF
+*ELEMENT OUTPUT
+S
+*END STEP

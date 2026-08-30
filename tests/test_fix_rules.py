@@ -160,6 +160,93 @@ def test_unfixable_failure_gives_guidance():
     print("OK unfixable-gives-guidance:", guidance[0][:60] + "...")
 
 
+def test_negative_eigenvalue_damping():
+    deck = Deck.parse(BASE_DECK % ("STEEL", "FIXED"))
+    report = make_report(deck, JobStatus.ABORTED, [err("negative_eigenvalue")])
+    action = choose_and_apply(report, deck, {}, DEFAULT_RULES)
+    txt = deck.render().upper()
+    assert action is not None and action.rule == "instability_damping", action
+    assert "STABILIZE" in txt, txt
+    print("OK instability_damping:", action.description)
+
+
+def test_negative_eigenvalue_escalates():
+    # Repeated firing must reach for progressively heavier damping.
+    deck = Deck.parse(BASE_DECK % ("STEEL", "FIXED"))
+    report = make_report(deck, JobStatus.ABORTED, [err("negative_eigenvalue")])
+    counts = {}
+    factors = []
+    for _ in range(3):
+        action = choose_and_apply(report, deck, counts, DEFAULT_RULES)
+        factors.append(float(action.details["new_stabilize"]))
+    assert factors == sorted(factors) and factors[0] < factors[-1], factors
+    print("OK instability escalation:", factors)
+
+
+def test_negative_eigenvalue_warning_ignored():
+    # A healthy buckling run emits negative-eigenvalue WARNINGS every step.
+    # Damping those would silently corrupt a converged result.
+    deck = Deck.parse(BASE_DECK % ("STEEL", "FIXED"))
+    warn = Diagnostic(kind="warning", category="negative_eigenvalue", text="w")
+    report = JobReport(
+        job_name="t", job_dir=Path("."), status=JobStatus.COMPLETED,
+        sta=StaReport(status=JobStatus.COMPLETED),
+        msg=MsgReport(diagnostics=[warn]), dat=DatReport(),
+    )
+    action = choose_and_apply(report, deck, {}, DEFAULT_RULES)
+    assert action is None, "must not damp a completed run: %r" % (action,)
+    print("OK negative-eigenvalue-warning-ignored")
+
+
+def test_negative_eigenvalue_warning_on_failed_job_fires():
+    # The real-solver case: Abaqus reports the eigenvalues as WARNINGS and the
+    # error as a downstream convergence failure. Damping must still win over
+    # generic increment refinement, since it is the targeted remedy.
+    deck = Deck.parse(BASE_DECK % ("STEEL", "FIXED"))
+    diags = [
+        Diagnostic(kind="warning", category="negative_eigenvalue", text="w"),
+        Diagnostic(kind="error", category="too_many_attempts", text="e"),
+    ]
+    report = make_report(deck, JobStatus.ABORTED, diags)
+    action = choose_and_apply(report, deck, {}, DEFAULT_RULES)
+    assert action is not None and action.rule == "instability_damping", action
+    print("OK negative-eigenvalue-warning-on-failure:", action.rule)
+
+
+def test_damping_fix_carries_a_fidelity_caveat():
+    # Damping can converge onto the unstable branch, so a "success" produced
+    # this way must not be reported as an unqualified one.
+    deck = Deck.parse(BASE_DECK % ("STEEL", "FIXED"))
+    report = make_report(deck, JobStatus.ABORTED, [err("negative_eigenvalue")])
+    action = choose_and_apply(report, deck, {}, DEFAULT_RULES)
+    assert action.caveat, "damping must declare its fidelity cost"
+    assert "RIKS" in action.caveat, action.caveat
+    # Deck-consistency repairs change no physics and must stay caveat-free.
+    deck2 = Deck.parse(BASE_DECK % ("STEELX", "FIXED"))
+    r2 = make_report(deck2, JobStatus.ABORTED, [err("undefined_set")])
+    a2 = choose_and_apply(r2, deck2, {}, DEFAULT_RULES)
+    assert a2.caveat is None, "a spelling repair needs no caveat"
+    print("OK damping-caveat present, name-repair caveat-free")
+
+
+def test_overconstraint_guidance_names_locations():
+    deck = Deck.parse(BASE_DECK % ("STEEL", "FIXED"))
+    diags = [
+        Diagnostic(kind="error", category="overconstraint",
+                   text="overconstraint", node=17, dof=2, source="msg"),
+        Diagnostic(kind="error", category="overconstraint",
+                   text="overconstraint", node=42, dof=1, source="msg"),
+    ]
+    report = make_report(deck, JobStatus.ABORTED, diags)
+    action = choose_and_apply(report, deck, {}, DEFAULT_RULES)
+    assert action is None, "overconstraint must not be auto-resolved: %r" % (action,)
+    guidance = diagnose(report)
+    assert guidance, "expected guidance"
+    assert "node 17 (DOF 2)" in guidance[0], guidance[0]
+    assert "node 42 (DOF 1)" in guidance[0], guidance[0]
+    print("OK overconstraint-guidance:", guidance[0][-60:])
+
+
 if __name__ == "__main__":
     test_deck_name_repair()
     test_singularity_stabilization()
@@ -170,4 +257,10 @@ if __name__ == "__main__":
     test_duplicate_definition_removed()
     test_conflicting_definition_is_not_removed()
     test_unfixable_failure_gives_guidance()
+    test_negative_eigenvalue_damping()
+    test_negative_eigenvalue_escalates()
+    test_negative_eigenvalue_warning_ignored()
+    test_negative_eigenvalue_warning_on_failed_job_fires()
+    test_damping_fix_carries_a_fidelity_caveat()
+    test_overconstraint_guidance_names_locations()
     print("\nAll fix-rule unit tests passed.")
