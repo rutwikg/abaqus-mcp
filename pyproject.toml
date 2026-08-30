@@ -17,7 +17,10 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Programming Language :: Python :: 3",
 ]
-dependencies = ["mcp>=2.0.0"]
+# Capped at <3: server.py targets the mcp 2.x API (`mcp.server.mcpserver.
+# MCPServer`, `@server.tool()`), not the older FastMCP one. A major bump is
+# free to move that import, which would break every fresh install.
+dependencies = ["mcp>=2.0.0,<3"]
 
 [project.urls]
 Homepage = "https://github.com/rutwikg/abaqus-mcp"
