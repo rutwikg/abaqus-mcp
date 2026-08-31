@@ -155,6 +155,25 @@ on demand:
 uvx --from abaqus-mcp abaqus-mcp
 ```
 
+### Docker
+
+A container image is provided, but read this before reaching for it: **the image
+cannot contain Abaqus.** Abaqus is licensed commercial software and cannot be
+redistributed, so the image ships the agent alone. Out of the box you get a
+server that starts, advertises its tools, validates specs and parses solver
+output — but cannot run a job.
+
+To actually solve, mount the host's Abaqus installation and point the agent at
+it (the licence server must also be reachable from inside the container):
+
+```bash
+docker run --rm -i -v /opt/SIMULIA:/opt/SIMULIA:ro -v "$PWD/runs:/work/runs" -e ABAQUS_AGENT_COMMAND=/opt/SIMULIA/Commands/abaqus abaqus-mcp
+```
+
+Call `check_environment` first — it reports exactly what was found and what to
+set if the launcher is missing. For a normal desktop install, the plain
+`pip install` above is simpler and works better.
+
 ### From source
 
 For development, or to run the demos and tests (which are not in the wheel):

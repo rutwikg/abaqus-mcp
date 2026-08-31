@@ -67,6 +67,16 @@ def test_load_needs_type():
     print("OK load type validated")
 
 
+def test_server_advertises_the_package_version():
+    # A hardcoded literal here drifted silently once already: the server told
+    # clients 0.1.0 while the package was 0.2.0.
+    from abaqus_mcp import __version__
+    from abaqus_mcp.server import server
+    advertised = getattr(server, "version", None)
+    assert advertised == __version__, (advertised, __version__)
+    print("OK server version tracks package:", advertised)
+
+
 if __name__ == "__main__":
     test_example_is_valid()
     test_parametric_example_is_valid()
@@ -76,4 +86,5 @@ if __name__ == "__main__":
     test_bad_face_selector()
     test_section_material_must_exist()
     test_load_needs_type()
+    test_server_advertises_the_package_version()
     print("\nAll spec validation tests passed.")

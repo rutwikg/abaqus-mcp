@@ -29,8 +29,10 @@ from .spec import dumps as spec_dumps
 from .spec import example_parametric_spec, example_spec, validate_spec
 
 server = MCPServer(
-    name="abaqus-agent",
-    version="0.1.0",
+    name="abaqus-mcp",
+    # Single source of truth: a hardcoded literal here silently drifted and was
+    # still advertising 0.1.0 to clients at release 0.2.0.
+    version=__version__,
     instructions=(
         "Drive Abaqus/Standard FEA simulations. Provide an Abaqus keyword input "
         "deck (.inp) via a file path. Use `autocorrect_simulation` to run a job "
@@ -59,19 +61,30 @@ def _results_block(job_name: str) -> str:
 @server.tool()
 def check_environment() -> str:
     """Report whether Abaqus is available and where jobs will run."""
-    return (
-        "Abaqus command: %s\n"
-        "Available: %s\n"
-        "Runs directory: %s\n"
+    available = CONFIG.available()
+    lines = [
+        "Abaqus command: %s" % CONFIG.command,
+        "Available: %s" % available,
+        "Runs directory: %s" % CONFIG.runs_dir,
         "Default CPUs: %d, job timeout: %ds"
-        % (
-            CONFIG.command,
-            CONFIG.available(),
-            CONFIG.runs_dir,
-            CONFIG.default_cpus,
-            CONFIG.job_timeout_s,
-        )
-    )
+        % (CONFIG.default_cpus, CONFIG.job_timeout_s),
+    ]
+    if not available:
+        # This is the first thing a new user hits when the solver is missing --
+        # notably anyone running the container image, which cannot bundle a
+        # licensed Abaqus. Say what to do rather than just reporting False.
+        lines += [
+            "",
+            "No Abaqus launcher was found, so every tool that submits a job or",
+            "builds a model will fail. The deck parsers and spec validation still",
+            "work. To fix:",
+            "  - install Abaqus and put its launcher on PATH, or",
+            "  - set ABAQUS_AGENT_COMMAND to the launcher's full path",
+            "    (e.g. C:\\SIMULIA\\Commands\\abaqus.bat), and",
+            "  - if running in a container, mount the host Abaqus installation",
+            "    and its licence server into the container as well.",
+        ]
+    return "\n".join(lines)
 
 @server.tool()
 def greeting() -> str:
@@ -295,7 +308,7 @@ def main() -> None:
     # transport and must stay clean, so diagnostics never go there. These lines
     # appear in your terminal when run by hand and in the client's MCP logs.
     def _log(msg):
-        sys.stderr.write("[abaqus-agent] %s\n" % msg)
+        sys.stderr.write("[abaqus-mcp] %s\n" % msg)
         sys.stderr.flush()
 
     _log("starting MCP server v%s (transport=%s)" % (__version__, transport))
