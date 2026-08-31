@@ -1,14 +1,23 @@
 {
   "_comment": [
     "Copy this to .mcp.json (Claude Code) or merge into claude_desktop_config.json.",
-    "This form assumes `pip install abaqus-mcp`, which puts `abaqus-mcp` on PATH.",
-    "To run without installing, use uv instead:",
-    "  \"command\": \"uvx\", \"args\": [\"--from\", \"abaqus-mcp\", \"abaqus-mcp\"]",
-    "To run from a clone, point cwd at the repo root and use:",
-    "  \"command\": \"python\", \"args\": [\"-m\", \"abaqus_mcp.server\"]",
-    "Abaqus itself is auto-discovered from PATH or C:\\SIMULIA\\Commands;",
+    "",
+    "THE COMMAND MUST MATCH HOW YOU INSTALLED IT.",
+    "",
+    "  pip install abaqus-mcp      -> puts `abaqus-mcp` on PATH; use the block below.",
+    "  uv tool install abaqus-mcp  -> same; use the block below.",
+    "  uvx                         -> installs NOTHING on PATH. The client must run",
+    "                                 uvx itself:",
+    "                                   \"command\": \"uvx\",",
+    "                                   \"args\": [\"--from\", \"abaqus-mcp\", \"abaqus-mcp\"]",
+    "  from a clone                -> \"command\": \"python\",",
+    "                                 \"args\": [\"-m\", \"abaqus_mcp.server\"],",
+    "                                 \"cwd\": \"/path/to/abaqus-mcp\"",
+    "",
+    "Abaqus itself is auto-discovered from PATH or the SIMULIA Commands dir;",
     "set ABAQUS_AGENT_COMMAND if your launcher lives elsewhere.",
-    "ABAQUS_AGENT_RUNS_DIR is optional -- it defaults to ./runs in the launch cwd."
+    "ABAQUS_AGENT_RUNS_DIR is optional -- it defaults to ./runs in the launch cwd.",
+    "Call check_environment first: it reports what was found and what to set."
   ],
   "mcpServers": {
     "abaqus-mcp": {
