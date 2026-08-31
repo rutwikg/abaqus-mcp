@@ -155,6 +155,13 @@ on demand:
 uvx --from abaqus-mcp abaqus-mcp
 ```
 
+> **Windows note.** `uv` can fail to install this with
+> `Failed to install: pywin32-...whl ... being used by another process`.
+> `pywin32` is a dependency of `mcp` on Windows, and uv's extraction races with
+> on-access virus scanning. `pip install abaqus-mcp` is unaffected — use it
+> instead. (Reproduced with both `uvx` and `uv tool install`; not specific to
+> this package.)
+
 ### Docker
 
 A container image is provided, but read this before reaching for it: **the image
@@ -220,7 +227,14 @@ print(result.narrative())
 ## Use from an MCP client
 
 Copy [`.mcp.json.example`](.mcp.json.example) to `.mcp.json` (Claude Code) or
-merge it into `claude_desktop_config.json` (Claude Desktop), then edit the paths:
+merge it into `claude_desktop_config.json` (Claude Desktop), then edit the paths.
+
+**The config must match how you installed it.** `pip install` and
+`uv tool install` put an `abaqus-mcp` executable on `PATH`, so the client can
+call it by name. `uvx` does not -- it runs the package from a temporary
+environment and installs nothing -- so the client has to invoke `uvx` itself.
+
+After `pip install abaqus-mcp` or `uv tool install abaqus-mcp`:
 
 ```json
 {
@@ -228,6 +242,20 @@ merge it into `claude_desktop_config.json` (Claude Desktop), then edit the paths
     "abaqus-mcp": {
       "command": "abaqus-mcp",
       "args": [],
+      "env": { "ABAQUS_AGENT_RUNS_DIR": "/where/job/output/should/go" }
+    }
+  }
+}
+```
+
+Using `uvx`, with nothing installed:
+
+```json
+{
+  "mcpServers": {
+    "abaqus-mcp": {
+      "command": "uvx",
+      "args": ["--from", "abaqus-mcp", "abaqus-mcp"],
       "env": { "ABAQUS_AGENT_RUNS_DIR": "/where/job/output/should/go" }
     }
   }
