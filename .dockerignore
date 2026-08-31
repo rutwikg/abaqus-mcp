@@ -1,0 +1,15 @@
+# Keep the build context small and free of local state.
+runs/
+tests/
+.git/
+.github/
+.claude/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.mcp.json
+*.private.md
