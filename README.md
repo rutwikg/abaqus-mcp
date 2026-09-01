@@ -155,12 +155,24 @@ on demand:
 uvx --from abaqus-mcp abaqus-mcp
 ```
 
-> **Windows note.** `uv` can fail to install this with
-> `Failed to install: pywin32-...whl ... being used by another process`.
-> `pywin32` is a dependency of `mcp` on Windows, and uv's extraction races with
-> on-access virus scanning. `pip install abaqus-mcp` is unaffected — use it
-> instead. (Reproduced with both `uvx` and `uv tool install`; not specific to
-> this package.)
+> **Windows note — use `pip`, not `uv`.** On Windows, `uv` (tested 0.12.5) fails
+> to install this package while unpacking `pywin32`:
+>
+> ```
+> Failed to install: pywin32-312-...whl
+>   Caused by: The wheel is invalid: Wheel contains an invalid entry (directory)
+>   in the `scripts` directory: ...\pywin32-312.data\scripts\.tmpXXXXXX
+> ```
+>
+> The `.tmpXXXXXX` entry is uv's own temporary directory, created inside
+> `pywin32`'s `.data/scripts` and then rejected by uv's own wheel validation.
+> Reproduced from a clean tool directory with both `uvx` and `uv tool install`,
+> and with `UV_LINK_MODE=copy`. `pywin32` is a dependency of **`mcp`**, not of
+> this package, so this affects any `mcp`-based server on Windows.
+>
+> `pip install abaqus-mcp` installs the identical package cleanly — verified in
+> a fresh venv. Use pip on Windows; `uvx` is fine on Linux and macOS, where
+> `pywin32` is not pulled in at all.
 
 ### Docker
 
