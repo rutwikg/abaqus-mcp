@@ -260,7 +260,9 @@ After `pip install abaqus-mcp` or `uv tool install abaqus-mcp`:
 }
 ```
 
-Using `uvx`, with nothing installed:
+Using `uvx`, with nothing installed — **Linux/macOS only**, see the Windows note
+above; on Windows the server fails to start because `uv` cannot unpack
+`pywin32`, and the client reports only `Server transport closed unexpectedly`:
 
 ```json
 {

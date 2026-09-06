@@ -7,7 +7,7 @@ name = "abaqus-mcp"
 version = "0.2.2"
 description = "MCP server for Abaqus/Standard FEA: builds models, runs jobs, and autonomously diagnoses and fixes solver failures"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
 authors = [{ name = "Rutwik Gulakala" }]
