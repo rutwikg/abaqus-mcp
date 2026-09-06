@@ -14,25 +14,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Optional
-import os
-import sys
-
-# Add the project's root folder to the Python path
-sys.path.insert(0, r"D:\Work\AgenticAI\Abaqus agent")
 
 from mcp.server.mcpserver import MCPServer
 
-from abaqus_mcp import __version__
-from abaqus_mcp.authoring import build_and_run_spec, build_deck_from_spec
-from abaqus_mcp.config import CONFIG
-from abaqus_mcp.loop import autocorrect_run
-from abaqus_mcp.report import build_report
-from abaqus_mcp.results import extract_results, format_results
-from abaqus_mcp.runner import run_deck
-from abaqus_mcp.spec import PARAM_SHAPES
-from abaqus_mcp.spec import dumps as spec_dumps
-from abaqus_mcp.spec import example_parametric_spec, example_spec, validate_spec
-
+from . import __version__
+from .authoring import build_and_run_spec, build_deck_from_spec
+from .config import CONFIG
+from .loop import autocorrect_run
+from .report import build_report
+from .results import extract_results, format_results
+from .runner import run_deck
+from .spec import PARAM_SHAPES
+from .spec import dumps as spec_dumps
+from .spec import example_parametric_spec, example_spec, validate_spec
 
 server = MCPServer(
     name="abaqus-mcp",

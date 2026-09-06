@@ -34,3 +34,7 @@ dist/
 
 # Private working notes. NEVER commit -- this repo is public.
 *.private.md
+
+# uv lockfile -- this is an application-style lock; the package pins deps in
+# pyproject.toml instead, and a committed lock here only goes stale.
+uv.lock
