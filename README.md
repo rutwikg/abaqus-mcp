@@ -1,4 +1,4 @@
-# abaqus-mcp
+# Abaqus MCP Server
 
 [![PyPI](https://img.shields.io/pypi/v/abaqus-mcp)](https://pypi.org/project/abaqus-mcp/)
 [![Python](https://img.shields.io/pypi/pyversions/abaqus-mcp)](https://pypi.org/project/abaqus-mcp/)
