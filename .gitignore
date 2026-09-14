@@ -38,3 +38,6 @@ dist/
 # uv lockfile -- this is an application-style lock; the package pins deps in
 # pyproject.toml instead, and a committed lock here only goes stale.
 uv.lock
+
+# Demo/post planning briefs -- contain licence and strategy detail.
+HANDOVER_*.md
