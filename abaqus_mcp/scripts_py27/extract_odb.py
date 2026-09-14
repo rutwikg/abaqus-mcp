@@ -36,6 +36,88 @@ def max_by(values, attr):
     return best, best_label
 
 
+# Whole-model energy histories. These are what decide whether a COMPLETED run
+# is physically meaningful: a job can converge cleanly while hourglass energy
+# carries the load, and Abaqus reports that as success.
+ENERGY_VARS = ("ALLIE", "ALLKE", "ALLAE", "ALLPD", "ALLSE", "ALLDMD",
+               "ALLWK", "ALLVD", "ALLFD", "ETOTAL")
+
+
+def energy_histories(step):
+    """{var: [(t, value), ...]} for the whole-model energy outputs."""
+    series = {}
+    try:
+        regions = step.historyRegions
+    except Exception:
+        return series
+    for rname in regions.keys():
+        region = regions[rname]
+        try:
+            outputs = region.historyOutputs
+        except Exception:
+            continue
+        for var in outputs.keys():
+            if var not in ENERGY_VARS:
+                continue
+            data = [(float(t), float(v)) for t, v in outputs[var].data]
+            # Whole-model energies live on the assembly region; if several
+            # regions report the same variable, keep the longest series.
+            if var not in series or len(data) > len(series[var]):
+                series[var] = data
+    return series
+
+
+def energy_summary(series):
+    """Final values plus the ratios an analyst actually checks.
+
+    Ratios are evaluated only where ALLIE has grown past 5% of its peak.
+    Early in an impact ALLIE is ~0, so an unguarded ALLAE/ALLIE is enormous
+    and meaningless -- reporting that as 'invalid' would be a false alarm.
+    """
+    if not series:
+        return {}
+    final = {}
+    for var, data in series.items():
+        if data:
+            final[var] = data[-1][1]
+
+    out = {"final": final}
+    allie = series.get("ALLIE") or []
+    if not allie:
+        return out
+    peak_ie = max(abs(v) for _, v in allie) or 0.0
+    out["peak_ALLIE"] = peak_ie
+    if peak_ie <= 0.0:
+        return out
+
+    floor = 0.05 * peak_ie
+    ie_at = dict(allie)
+    for num in ("ALLAE", "ALLKE", "ALLPD", "ALLDMD"):
+        data = series.get(num)
+        if not data:
+            continue
+        worst_t, worst_r = None, 0.0
+        for t, v in data:
+            ie = ie_at.get(t)
+            if ie is None or abs(ie) < floor:
+                continue
+            r = abs(v) / abs(ie)
+            if r > worst_r:
+                worst_r, worst_t = r, t
+        out["max_%s_over_ALLIE" % num] = worst_r
+        out["max_%s_over_ALLIE_time" % num] = worst_t
+        if num in final and final.get("ALLIE"):
+            out["final_%s_over_ALLIE" % num] = abs(final[num]) / abs(final["ALLIE"])
+
+    etot = series.get("ETOTAL")
+    if etot:
+        # ETOTAL should stay near its initial value; drift is normalised by the
+        # peak internal energy so it is comparable across models.
+        drift = max(abs(v - etot[0][1]) for _, v in etot)
+        out["ETOTAL_drift_over_ALLIE"] = drift / peak_ie
+    return out
+
+
 def extract(odb_path):
     from odbAccess import openOdb
     odb = openOdb(odb_path, readOnly=True)
@@ -79,6 +161,11 @@ def extract(odb_path):
                 mag = (rx * rx + ry * ry + rz * rz) ** 0.5
                 entry["net_reaction_force"] = [rx, ry, rz]
                 entry["net_reaction_magnitude"] = mag
+            series = energy_histories(step)
+            if series:
+                summary = energy_summary(series)
+                if summary:
+                    entry["energy"] = summary
             out["steps"].append(entry)
         out["status"] = "ok"
     finally:
