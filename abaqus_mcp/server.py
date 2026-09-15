@@ -332,3 +332,198 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# --------------------------------------------------------------------------
+# sweeps: unattended runs + the parked-failure queue
+# --------------------------------------------------------------------------
+
+@server.tool()
+def sweep_status(sweep: str) -> str:
+    """Summarise a parametric sweep: how many designs are valid, parked or
+    abandoned, and where its results table lives.
+
+    Args:
+        sweep: The sweep name given when it was launched.
+    """
+    from .sweep import load_state, summarise, sweep_dir
+    state = load_state(sweep)
+    if not state:
+        return "No sweep named '%s' under %s" % (sweep, CONFIG.runs_dir / "_sweeps")
+    d = sweep_dir(sweep)
+    return ("Sweep '%s': %d designs -- %s\n"
+            "Results table: %s\nFix log: %s"
+            % (sweep, len(state), summarise(state),
+               d / "results.csv", d / "fixlog.jsonl"))
+
+
+@server.tool()
+def list_parked_failures(sweep: str) -> str:
+    """List the designs a sweep could not resolve on its own.
+
+    These are waiting for judgement: each either failed to converge, or
+    converged to something the physical-validity gate rejected. Use
+    get_parked_failure to read the diagnostics for one.
+
+    Args:
+        sweep: The sweep name.
+    """
+    from .sweep import list_parked
+    parked = list_parked(sweep)
+    if not parked:
+        return "Nothing parked in sweep '%s' -- either all designs resolved, or it has not run." % sweep
+    lines = ["%d design(s) awaiting judgement in '%s':" % (len(parked), sweep)]
+    for p in parked:
+        bits = []
+        if p["error_categories"]:
+            bits.append("errors: " + ", ".join(p["error_categories"]))
+        if p["validity_failures"]:
+            bits.append("rejected: " + ", ".join(p["validity_failures"]))
+        if p["fixes_already_tried"]:
+            bits.append("already tried: " + ", ".join(p["fixes_already_tried"]))
+        lines.append("  %-24s %s" % (p["design_id"], p["parked_because"][:90]))
+        for b in bits:
+            lines.append("      " + b)
+    return "\n".join(lines)
+
+
+@server.tool()
+def get_parked_failure(sweep: str, design_id: str, deck_chars: int = 8000) -> str:
+    """Full diagnostics for one parked design, to reason about before fixing.
+
+    Returns the solver status, the error-level diagnostics, the tail of the
+    .sta and .msg, any input-processor errors, the validity verdict, the fixes
+    already attempted, and the deck itself.
+
+    Args:
+        sweep: The sweep name.
+        design_id: Which parked design to inspect.
+        deck_chars: How much of the .inp to include (from the start).
+    """
+    from .sweep import get_parked
+    b = get_parked(sweep, design_id)
+    if b is None:
+        return "No parked design '%s' in sweep '%s'." % (design_id, sweep)
+
+    out = ["design: %s" % design_id,
+           "params: %s" % json.dumps(b.get("params") or {}),
+           "parked because: %s" % b.get("parked_because", ""),
+           "solver status: %s (succeeded=%s)"
+           % (b.get("solver_status"), b.get("succeeded"))]
+
+    val = b.get("validity")
+    if val:
+        out.append("")
+        out.append("VALIDITY: %s" % ("valid" if val.get("valid") else "REJECTED"))
+        for c in val.get("checks", []):
+            out.append("  " + c)
+        if val.get("remedy"):
+            out.append("  remedy: " + val["remedy"])
+
+    if b.get("errors"):
+        out.append("")
+        out.append("ERROR-LEVEL DIAGNOSTICS:")
+        for e in b["errors"]:
+            loc = ""
+            if e.get("node"):
+                loc = " (node %s%s)" % (e["node"], ", DOF %s" % e["dof"] if e.get("dof") else "")
+            elif e.get("element"):
+                loc = " (element %s)" % e["element"]
+            out.append("  [%s]%s %s" % (e.get("category"), loc, (e.get("text") or "")[:300]))
+
+    if b.get("dat_errors"):
+        out.append("")
+        out.append("INPUT-PROCESSOR ERRORS (.dat):")
+        out.append(b["dat_errors"])
+
+    for key, title in (("sta_tail", "STATUS FILE (.sta) tail"),
+                       ("msg_tail", "MESSAGE FILE (.msg) tail")):
+        if b.get(key):
+            out.append("")
+            out.append(title + ":")
+            out.append(b[key])
+
+    if b.get("fixes_already_tried"):
+        out.append("")
+        out.append("ALREADY TRIED (do not repeat): "
+                   + ", ".join(b["fixes_already_tried"]))
+    if b.get("stopped_reason"):
+        out.append("loop stopped: " + b["stopped_reason"])
+
+    if b.get("deck"):
+        out.append("")
+        out.append("DECK (%s):" % b.get("deck_path", ""))
+        out.append(b["deck"][:max(0, deck_chars)])
+    return "\n".join(out)
+
+
+@server.tool()
+def apply_reasoned_fix(
+    sweep: str,
+    design_id: str,
+    edits_json: str,
+    rationale: str,
+    max_iters: int = 3,
+    cpus: int = 4,
+) -> str:
+    """Apply a reasoned deck edit to a parked design and re-run it.
+
+    Edits are literal find/replace so the change is reviewable and lands in the
+    fix log. Edits that remove output requests, or that delete most of the
+    deck, are refused: a run is judged on its output, so deleting the output is
+    not a fix.
+
+    Args:
+        sweep: The sweep name.
+        design_id: The parked design to repair.
+        edits_json: JSON list of {"find": ..., "replace": ...} applied in order.
+        rationale: Why this edit should fix the diagnosed failure. Recorded.
+        max_iters: Deterministic fix iterations allowed on the re-run.
+        cpus: CPUs for the solver.
+    """
+    from .sweep import RefusedEdit, apply_reasoned_fix as _apply
+    try:
+        edits = json.loads(edits_json)
+    except json.JSONDecodeError as e:
+        return "edits_json is not valid JSON: %s" % e
+    if not isinstance(edits, list) or not edits:
+        return "edits_json must be a non-empty JSON list of {find, replace} objects."
+    try:
+        entry = _apply(sweep, design_id, edits, rationale,
+                       max_iters=max_iters, cpus=cpus)
+    except RefusedEdit as e:
+        return "EDIT REFUSED: %s" % e
+    except (ValueError, KeyError) as e:
+        return "Could not apply: %s" % e
+
+    head = ("RESOLVED" if entry["outcome"] == "valid"
+            else "still %s" % entry["outcome"])
+    return ("%s -- %s\n  was: %s\n  edits: %s\n  now: %s"
+            % (design_id, head, entry["was"], "; ".join(entry["edits"]),
+               entry["reason"]))
+
+
+@server.tool()
+def get_fix_log(sweep: str) -> str:
+    """The record of every reasoned fix attempted in a sweep, successful or not.
+
+    What failed, what was diagnosed, what changed, and whether it then
+    converged.
+
+    Args:
+        sweep: The sweep name.
+    """
+    from .sweep import fix_log
+    entries = fix_log(sweep)
+    if not entries:
+        return "No reasoned fixes recorded for sweep '%s' yet." % sweep
+    lines = ["%d reasoned fix attempt(s) in '%s':" % (len(entries), sweep)]
+    for e in entries:
+        lines.append("")
+        lines.append("%s  %s -> %s" % (e.get("at", ""), e["design_id"], e["outcome"]))
+        lines.append("  was      : %s" % e.get("was", ""))
+        lines.append("  rationale: %s" % e.get("rationale", ""))
+        for ed in e.get("edits", []):
+            lines.append("  edit     : %s" % ed)
+        lines.append("  result   : %s" % e.get("reason", ""))
+    return "\n".join(lines)
