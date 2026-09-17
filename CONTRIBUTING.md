@@ -102,6 +102,17 @@ attempted (a 0.25 mm notch at an 18 mm seed) by locally refining. Messy imported
 CAD with sliver faces is the likely trigger. If you can produce a real
 `negative_jacobian`, that deck is a valuable test fixture.
 
+**Finish the result renderer.** ⚠️ *Written but not shipped.*
+`abaqus_mcp/render.py` plus `scripts_py27/capture_odb.py` produce a PNG contour
+plot on the deformed shape, and the plumbing works -- but `abaqus viewer noGUI`
+dies with `EXCEPTION_ACCESS_VIOLATION` in `ABQvwrK` on the development machine,
+below the Python layer. Probably offscreen rendering with no display context.
+If it runs on your install, re-register the `render_result_image` tool in
+`server.py` -- it is a one-line change. Two traps are already handled in the
+script: a tensor field needs `refinement=(INVARIANT, 'Mises')` with exactly
+that capitalisation, and `printToFile` silently writes nothing if the filename
+contains a dot.
+
 **Contact-specific fix rules.** `contact` failures currently fall through to
 generic increment refinement. Real remedies differ: adjusting initial
 over-closure, softening contact stiffness, adding `*CONTACT CONTROLS`,

@@ -527,3 +527,178 @@ def get_fix_log(sweep: str) -> str:
             lines.append("  edit     : %s" % ed)
         lines.append("  result   : %s" % e.get("reason", ""))
     return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
+# inspection, judgement and rendering
+# --------------------------------------------------------------------------
+
+@server.tool()
+def check_validity(job_name: str, quasi_static: bool = False) -> str:
+    """Judge whether a COMPLETED job is physically believable.
+
+    A green solver status only means the analysis reached the end of the step.
+    This reads the energy balance and reports whether the answer can be trusted:
+    artificial (hourglass) energy carrying the load, kinetic energy dominating a
+    quasi-static event, or total energy not being conserved.
+
+    Args:
+        job_name: The job to judge.
+        quasi_static: True if the event is meant to be slow (a crush, a press).
+            Kinetic energy is only a failure signal when it is.
+    """
+    from .validity import assess
+    res = extract_results(job_name)
+    if not res.get("ok"):
+        return "Could not read results for '%s': %s" % (job_name, res.get("error"))
+    v = assess(res, quasi_static=quasi_static)
+    out = [v.summary()]
+    if v.metrics:
+        out.append("")
+        out.append("metrics:")
+        for k in sorted(v.metrics):
+            out.append("  %-28s %.4f" % (k, v.metrics[k]))
+    return "\n".join(out)
+
+
+@server.tool()
+def inspect_deck(inp_path: str) -> str:
+    """Summarise what is actually in an Abaqus input deck.
+
+    Reports the mesh, materials, sections, sets, steps, loads and boundary
+    conditions a deck defines, plus any references pointing at names the deck
+    never defines. Reads the file only: no solver, no licence token.
+
+    Args:
+        inp_path: Path to the .inp deck, or a job name under the runs directory.
+    """
+    from .inp import Deck
+    from .fixes import _referenced_names
+    p = Path(inp_path)
+    if not p.is_file():
+        cand = _job_dir(inp_path) / ("%s.inp" % inp_path)
+        if cand.is_file():
+            p = cand
+        else:
+            return "No deck at %s (also tried %s)" % (inp_path, cand)
+
+    deck = Deck.load(p)
+    defined = deck.defined_names()
+    counts = {}
+    for b in deck.blocks:
+        if not b.is_comment and b.keyword:
+            counts[b.keyword] = counts.get(b.keyword, 0) + 1
+
+    out = ["Deck: %s" % p, "%d keyword blocks" % sum(counts.values()), ""]
+    groups = (
+        ("MESH", ("NODE", "ELEMENT")),
+        ("SECTIONS", ("SOLID SECTION", "SHELL SECTION", "BEAM SECTION",
+                      "MEMBRANE SECTION")),
+        ("MATERIALS", ("MATERIAL", "ELASTIC", "PLASTIC", "DENSITY")),
+        ("STEPS", ("STEP", "STATIC", "DYNAMIC", "VISCO", "FREQUENCY", "BUCKLE",
+                   "HEAT TRANSFER")),
+        ("LOADS/BCs", ("BOUNDARY", "CLOAD", "DLOAD", "DSLOAD", "TEMPERATURE",
+                       "INITIAL CONDITIONS")),
+        ("INTERACTIONS", ("CONTACT", "CONTACT PAIR", "TIE", "SURFACE",
+                          "SURFACE INTERACTION")),
+        ("OUTPUT", ("OUTPUT", "NODE OUTPUT", "ELEMENT OUTPUT", "ENERGY OUTPUT",
+                    "NODE PRINT", "EL PRINT")),
+    )
+    for title, kws in groups:
+        present = ["*%s x%d" % (k, counts[k]) for k in kws if k in counts]
+        if present:
+            out.append("%-14s %s" % (title + ":", ", ".join(present)))
+
+    out.append("")
+    for cat in ("material", "nset", "elset", "surface"):
+        names = sorted(defined.get(cat) or [])
+        if names:
+            shown = ", ".join(names[:12])
+            if len(names) > 12:
+                shown += ", ... (%d total)" % len(names)
+            out.append("%-9s %s" % (cat + ":", shown))
+
+    # Dangling references are the commonest reason a deck refuses to run.
+    refs = _referenced_names(deck)
+    dangling = []
+    for name in refs["material"]:
+        if name not in defined["material"]:
+            dangling.append("material '%s'" % name)
+    for name in refs["set"]:
+        if name not in (defined["nset"] | defined["elset"]):
+            dangling.append("set '%s'" % name)
+    out.append("")
+    if dangling:
+        out.append("DANGLING REFERENCES (this deck will not run):")
+        for d in dangling:
+            out.append("  " + d)
+        out.append("autocorrect_simulation can usually repair these.")
+    else:
+        out.append("No dangling set/material references.")
+    return "\n".join(out)
+
+
+@server.tool()
+def start_sweep(
+    sweep_name: str,
+    designs_json: str,
+    max_iters: int = 3,
+    cpus: int = 4,
+    quasi_static: bool = False,
+) -> str:
+    """Run a parametric sweep, parking whatever needs judgement.
+
+    Each design goes through the autocorrect loop and then the validity gate.
+    Anything that fails, or that converges to something not believable, is
+    parked with full diagnostics rather than dropped. Resumable: re-running the
+    same sweep name skips designs that already finished.
+
+    This blocks until the sweep completes, so keep the design count small from
+    an interactive client. For a long unattended sweep, run the sweep module as
+    a detached process instead.
+
+    Args:
+        sweep_name: Name for this sweep; also its results directory.
+        designs_json: JSON list of {"design_id":..., "inp":..., "params":{...}}.
+        max_iters: Deterministic fix iterations allowed per design.
+        cpus: CPUs per solver run.
+        quasi_static: Whether to judge the event as quasi-static.
+    """
+    from .sweep import Design, run_sweep, summarise, sweep_dir
+    try:
+        raw = json.loads(designs_json)
+    except json.JSONDecodeError as e:
+        return "designs_json is not valid JSON: %s" % e
+    if not isinstance(raw, list) or not raw:
+        return "designs_json must be a non-empty JSON list."
+
+    designs = []
+    for i, d in enumerate(raw):
+        if not isinstance(d, dict) or not d.get("design_id"):
+            return "design %d needs a 'design_id'" % i
+        designs.append(Design(design_id=d["design_id"],
+                              params=d.get("params") or {},
+                              inp=d.get("inp"), spec=d.get("spec")))
+
+    state = run_sweep(sweep_name, designs, max_iters=max_iters, cpus=cpus,
+                      quasi_static=quasi_static)
+    sd = sweep_dir(sweep_name)
+    lines = ["Sweep '%s': %s" % (sweep_name, summarise(state)), ""]
+    for o in sorted(state.values(), key=lambda x: x.design_id):
+        lines.append("  %-22s %-10s %s" % (o.design_id, o.status, o.reason[:70]))
+    lines.append("")
+    lines.append("results: %s" % (sd / "results.csv"))
+    lines.append("Use list_parked_failures to see what needs judgement.")
+    return "\n".join(lines)
+
+
+@server.tool()
+def whats_new(version: str = "") -> str:
+    """What changed in this release, and in earlier ones.
+
+    Args:
+        version: A specific version such as "0.3.0". Omit for the current
+            release, or pass "all" for the whole history.
+    """
+    from .changelog import render_changelog
+    return render_changelog(version or None)

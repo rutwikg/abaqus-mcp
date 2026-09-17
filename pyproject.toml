@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "abaqus-mcp"
-version = "0.2.2"
+version = "0.3.0"
 description = "MCP server for Abaqus/Standard FEA: builds models, runs jobs, and autonomously diagnoses and fixes solver failures"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -38,4 +38,4 @@ abaqus-mcp = "abaqus_mcp.server:main"
 packages = ["abaqus_mcp", "abaqus_mcp.parsers"]
 
 [tool.setuptools.package-data]
-abaqus_mcp = ["scripts_py27/*.py"]
+abaqus_mcp = ["scripts_py27/*.py", "CHANGELOG.md"]
